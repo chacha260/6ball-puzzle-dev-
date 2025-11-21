@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Play, RotateCw, RotateCcw, ArrowLeft, ArrowRight, ArrowDown, ArrowUp, RefreshCw } from 'lucide-react';
 
 // --- Constants & Types ---
@@ -108,13 +108,9 @@ const getTopNeighbors = (r: number, c: number) => {
 
 // 特定のグループ内にヘキサゴン（リング）が含まれているかチェック
 // 中心マスの色が何であれ、その周囲6マスがすべて groupSet に含まれていればOK
-const hasHexagonInGroup = (groupSet: Set<string>, grid: Grid) => {
+// Warning修正: grid引数を削除（未使用のため）
+const hasHexagonInGroup = (groupSet: Set<string>) => {
     // グリッド全体を走査して、その座標を中心としたリングがグループ内に存在するか確認
-    // ※最適化のため、groupに含まれる座標の周辺だけ調べれば良いが、
-    //   ここでは実装の単純化のため全探索に近い形をとるが、計算量は限定的。
-    //   より効率的には「グループ内の各ボールの隣接マスの共通集合」などを探すが、
-    //   ここでは「グリッド上の任意の有効座標を中心として、その隣接6個がすべてgroupSetにあるか」を見る。
-    
     for (let r = 0; r < TOTAL_ROWS; r++) {
         for (let c = 0; c < COLS; c++) {
             // 中心 (r,c) はグループに含まれていなくてもよい（別色でもよい）
@@ -183,18 +179,10 @@ const checkPyramidStructure = (r: number, c: number, groupSet: Set<string>, dir:
 // 特定のグループ内にストレート（6個以上）が含まれているかチェック
 // 対象：横、斜め右下、斜め左下 (縦ジグザグは対象外)
 const hasStraightInGroup = (groupSet: Set<string>) => {
-    // 探索方向: [dr, dc] ではない（奇数偶数で変わるため）。
-    // 代わりに隣接取得ロジックを使ってチェーンを作る。
-    // 3方向だけチェックすればよい（逆方向は始点を変えれば同じことなので）。
-    // 1. 右 (Horizontal)
-    // 2. 右下 (Diagonal Right)
-    // 3. 左下 (Diagonal Left)
-
     for (const key of Array.from(groupSet)) {
         const [startR, startC] = key.split(',').map(Number);
         
         // 1. Horizontal Check (右方向)
-        // ヘックスグリッドの配列上、同じ行の c+1 は右隣
         let count = 1;
         for (let k = 1; k < 6; k++) {
              if (groupSet.has(`${startR},${startC + k}`)) count++;
@@ -243,7 +231,7 @@ export default function SixBallPuzzle() {
   const [nextColors, setNextColors] = useState<number[]>([]);
   const [score, setScore] = useState(0);
   const [gameState, setGameState] = useState<'START' | 'PLAYING' | 'SETTLING' | 'GAME_OVER'>('START');
-  const [message, setMessage] = useState('');
+  // Warning修正: message変数を削除（未使用のため）
   const [comboMessage, setComboMessage] = useState(''); 
 
   const gridRef = useRef<Grid>([]);
@@ -270,7 +258,6 @@ export default function SixBallPuzzle() {
     spawnPiece(generateNextColors());
     
     setGameState('PLAYING');
-    setMessage('');
     setComboMessage('');
   }, []);
 
@@ -372,6 +359,8 @@ export default function SixBallPuzzle() {
     let nextGrid = currentGrid.map(row => [...row]);
     let totalPoints = 0;
     const visitedGlobal = new Set<string>();
+    const ballsToRemove = new Set<string>(); // 消去するボールの座標セット
+
     let maxComboName = '';
     let maxPriority = -1; // 0:Normal, 1:Straight, 2:Pyramid, 3:Hexagon
 
@@ -380,6 +369,7 @@ export default function SixBallPuzzle() {
         for (let c = 0; c < COLS; c++) {
             if (nextGrid[r][c] === EMPTY || visitedGlobal.has(`${r},${c}`)) continue;
 
+            const groupColor = nextGrid[r][c];
             const group = getConnectedGroup(r, c, nextGrid, visitedGlobal);
             
             if (group.length >= 6) {
@@ -393,7 +383,8 @@ export default function SixBallPuzzle() {
                 // 優先順位: ヘキサゴン > ピラミッド > ストレート > 通常
 
                 // 1. Hexagon Check
-                if (hasHexagonInGroup(groupSet, nextGrid)) {
+                // Warning修正: 引数 grid を削除
+                if (hasHexagonInGroup(groupSet)) {
                     points = 1000;
                     comboName = 'ヘキサゴン！';
                     isSpecial = true;
@@ -415,30 +406,47 @@ export default function SixBallPuzzle() {
                 }
                 else {
                     // Normal Match
-                    points = 0; // Base score calculated below
+                    points = 0; 
                     comboName = 'マッチ！';
                     priority = 0;
                 }
 
-                // Calculate Score
-                // Base Points for clearing balls
-                const ballPoints = group.length * 100 + (group.length - 6) * 50;
-                totalPoints += ballPoints + points;
+                // Warning修正: isSpecial が使われるようにこのブロックが必須
+                // 特殊役の場合、同色のボールを盤面から全消去する
+                if (isSpecial) {
+                    for (let rr = 0; rr < TOTAL_ROWS; rr++) {
+                        for (let cc = 0; cc < COLS; cc++) {
+                            if (nextGrid[rr][cc] === groupColor) {
+                                ballsToRemove.add(`${rr},${cc}`);
+                            }
+                        }
+                    }
+                } else {
+                    // 通常マッチの場合はグループのみ消去
+                    group.forEach(p => ballsToRemove.add(`${p.r},${p.c}`));
+                }
+
+                // 役ボーナスポイント加算
+                totalPoints += points;
 
                 // Update Combo Message Priority
                 if (priority > maxPriority) {
                     maxPriority = priority;
                     maxComboName = comboName;
                 }
-
-                // Remove Balls
-                // ※ ヘキサゴンの中心が別色の場合、その中心は group に含まれていないため消えない（仕様通り）
-                // ※ 同色なら group に含まれるため消える（仕様通り）
-                group.forEach(p => {
-                    nextGrid[p.r][p.c] = EMPTY;
-                });
             }
         }
+    }
+
+    // 消去処理
+    if (ballsToRemove.size > 0) {
+        // 消えたボールの数だけスコア加算 (1個100点)
+        totalPoints += ballsToRemove.size * 100;
+
+        ballsToRemove.forEach(key => {
+            const [r, c] = key.split(',').map(Number);
+            nextGrid[r][c] = EMPTY;
+        });
     }
 
     if (maxComboName) {
@@ -500,7 +508,6 @@ export default function SixBallPuzzle() {
             // 落下もマッチもなければ次のピースへ
             if (checkGameOver(gridRef.current)) {
               setGameState('GAME_OVER');
-              setMessage('Game Over!');
             } else {
               setGameState('PLAYING');
               spawnPiece(nextColors);
